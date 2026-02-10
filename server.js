@@ -17,7 +17,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Minimum messages before sending GUVI callback
-const CALLBACK_THRESHOLD = 3;
+const CALLBACK_THRESHOLD = 6;
 
 // ─── Middleware ──────────────────────────────────────────────
 app.use(express.json());
@@ -144,11 +144,24 @@ app.post("/honey-pot", authMiddleware, async (req, res) => {
     await setSession(sessionId, session);
 
     // ── 6. Auto GUVI callback (fire-and-forget) ──
-    if (
+    // ── 6. Auto GUVI callback (fire-and-forget) ──
+    // Trigger if:
+    // (Scam Confirmed) AND
+    // (Messages >= Threshold OR (Messages >= 2 AND Critical Intelligence Found))
+    
+    const hasCriticalIntel =
+        session.extractedIntelligence.upiIds.length > 0 ||
+        session.extractedIntelligence.phoneNumbers.length > 0 ||
+        session.extractedIntelligence.phishingLinks.length > 0 ||
+        session.extractedIntelligence.bankAccounts.length > 0;
+
+    const shouldTriggerCallback =
       session.scamDetected &&
-      session.totalMessagesExchanged >= CALLBACK_THRESHOLD &&
-      !session.callbackSent
-    ) {
+      !session.callbackSent &&
+      (session.totalMessagesExchanged >= CALLBACK_THRESHOLD ||
+        (session.totalMessagesExchanged >= 2 && hasCriticalIntel));
+
+    if (shouldTriggerCallback) {
       // Mark as sent BEFORE the async call to prevent duplicates
       session.callbackSent = true;
       await setSession(sessionId, session);
