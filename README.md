@@ -39,3 +39,6 @@ This project was built for the **GUVI Hackathon** to detect scam intent, engage 
 - **POST /honey-pot**: Main endpoint for receiving scam messages.
 - **GET /session/:sessionId**: View session details.
 - **POST /finalize/:sessionId**: Manually trigger GUVI callback.
+
+---
+*Built with ❤️ for a safer internet.*
