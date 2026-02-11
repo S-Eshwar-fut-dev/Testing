@@ -8,7 +8,7 @@ const { getContextualFallback } = require("./persona");
 let groqClient = null;
 
 function initGroq() {
-  const apiKey = process.env.GROK_API_KEY;
+  const apiKey = (process.env.GROK_API_KEY || "").trim();
   if (!apiKey || apiKey === "your_groq_api_key_here") {
     console.warn("⚠️  GROK_API_KEY not set.");
     return;

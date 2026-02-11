@@ -28,7 +28,7 @@ app.use(express.json());
  */
 function authMiddleware(req, res, next) {
   const apiKey = req.headers["x-api-key"];
-  const expectedKey = process.env.API_KEY;
+  const expectedKey = (process.env.API_KEY || "").trim();
 
   if (!expectedKey) {
     console.warn("⚠️  API_KEY env variable not set. Skipping auth.");
