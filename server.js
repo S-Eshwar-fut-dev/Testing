@@ -44,6 +44,18 @@ function authMiddleware(req, res, next) {
   next();
 }
 
+/**
+ * Validates and sanitizes AI reply before sending to client.
+ * Ensures every response has a non-empty string reply.
+ */
+function sanitizeReply(reply) {
+  if (!reply || typeof reply !== 'string' || reply.trim().length === 0) {
+    console.warn("⚠️ Invalid reply detected, using stall response");
+    return "sir... connection issue... wait...";
+  }
+  return reply.trim();
+}
+
 // ─── Routes ─────────────────────────────────────────────────
 
 // Health check
@@ -62,6 +74,9 @@ app.get("/", (req, res) => {
  * replies, and extracts intelligence.
  */
 app.post("/honey-pot", authMiddleware, async (req, res) => {
+  const requestStartTime = Date.now();
+  const TIMEOUT_THRESHOLD = 9000; // 9 seconds (leave 1s buffer for Vercel)
+
   try {
     const { sessionId, message, conversationHistory } = req.body;
 
@@ -115,7 +130,16 @@ app.post("/honey-pot", authMiddleware, async (req, res) => {
       }
     }
 
-    // ── 4. Generate AI reply ──
+    // ── 4. Check timeout before AI generation ──
+    if (Date.now() - requestStartTime > TIMEOUT_THRESHOLD) {
+      console.warn("⏱️ Request approaching timeout, sending immediate response");
+      return res.json({
+        status: "success",
+        reply: sanitizeReply("sir... ek minute... app slow hai..."),
+      });
+    }
+
+    // ── 5. Generate AI reply ──
     const aiReply = await generateReply(
       session.systemPrompt,
       conversationHistory || [],
@@ -177,7 +201,7 @@ app.post("/honey-pot", authMiddleware, async (req, res) => {
     // ── 7. Send simple response ──
     return res.json({
       status: "success",
-      reply: aiReply,
+      reply: sanitizeReply(aiReply),
     });
   } catch (error) {
     console.error("❌ /honey-pot error:", error);
