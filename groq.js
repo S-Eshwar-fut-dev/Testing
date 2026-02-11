@@ -26,6 +26,15 @@ function initGroq() {
 }
 
 /**
+ * Generate a minimal stalling phrase when all AI generation fails.
+ * Uses randomized excuses to avoid repetition.
+ */
+function generateMinimalStall() {
+  const excuses = ['connection', 'network', 'phone', 'app', 'battery'];
+  return `sir... ${excuses[Math.floor(Math.random() * excuses.length)]} problem...`;
+}
+
+/**
  * Generate a scambaiting reply using Groq.
  *
  * @param {string} systemPrompt - The persona system instruction
@@ -34,9 +43,10 @@ function initGroq() {
  * @returns {Promise<string>} The AI-generated reply
  */
 async function generateReply(systemPrompt, conversationHistory, newMessage) {
-  // Fallback if Groq is not configured
+  // If Groq is not configured, use minimal stall
   if (!groqClient) {
-    return getFallbackReply();
+    console.warn("⚠️ Groq client not available, using minimal stall");
+    return generateMinimalStall();
   }
 
   try {
@@ -61,13 +71,37 @@ async function generateReply(systemPrompt, conversationHistory, newMessage) {
       messages,
       temperature: 0.8,
       max_tokens: 256,
+      timeout: 8000, // 8-second max for Vercel compatibility
     });
 
     const text = completion.choices?.[0]?.message?.content;
-    return text || getFallbackReply();
+    if (text) return text;
+
+    // If completion returned empty, try recovery
+    console.warn("⚠️ Primary model returned empty response, attempting recovery");
+    throw new Error("Empty response from primary model");
   } catch (error) {
-    console.error("❌ Groq API error:", error.message);
-    return getFallbackReply();
+    console.error("❌ Primary Groq call failed:", error.message);
+
+    // Recovery attempt with smaller, faster model
+    try {
+      const recovery = await groqClient.chat.completions.create({
+        model: "llama-3.1-8b-instant",
+        messages: [
+          { role: "system", content: "You are a confused Indian person talking to someone on the phone. Keep it under 10 words. Use simple Hindi-English mix." },
+          { role: "user", content: newMessage }
+        ],
+        temperature: 0.9,
+        max_tokens: 50,
+        timeout: 4000, // Tighter timeout for recovery
+      });
+      const recoveryText = recovery.choices?.[0]?.message?.content;
+      console.log("🔄 Recovery generation succeeded");
+      return recoveryText || generateMinimalStall();
+    } catch (recoveryError) {
+      console.error("❌ Recovery generation failed:", recoveryError.message);
+      return generateMinimalStall();
+    }
   }
 }
 
@@ -105,6 +139,7 @@ async function classifyScamIntent(conversationHistory, latestMessage) {
       ],
       temperature: 0,
       max_tokens: 8,
+      timeout: 8000,
     });
 
     const answer = (completion.choices?.[0]?.message?.content || "")
@@ -117,20 +152,6 @@ async function classifyScamIntent(conversationHistory, latestMessage) {
     console.error("❌ Scam classification error:", error.message);
     return false;
   }
-}
-
-/**
- * Fallback replies when Groq is unavailable.
- */
-function getFallbackReply() {
-  const fallbacks = [
-    "sir please wait... my phone is hanging...",
-    "bro hold on... network issue...",
-    "one minute sir... i am trying...",
-    "sir link is not opening... showing error...",
-    "bhai wait... otp not coming...",
-  ];
-  return fallbacks[Math.floor(Math.random() * fallbacks.length)];
 }
 
 module.exports = { initGroq, generateReply, classifyScamIntent };
