@@ -8,7 +8,7 @@
 require("dotenv").config();
 
 const express = require("express");
-const { selectPersona } = require("./persona");
+const { selectPersona, PERSONAS, getEnhancedSystemPrompt } = require("./persona");
 const { extractIntelligence, mergeIntelligence } = require("./extractor");
 const { initGroq, generateReply, classifyScamIntent } = require("./groq"); // Groq-powered (OpenAI-compatible)
 const { initRedis, getSession, setSession } = require("./redis");
@@ -98,6 +98,8 @@ app.post("/honey-pot", authMiddleware, async (req, res) => {
         personaName: persona.name,
         systemPrompt: persona.systemPrompt,
         totalMessagesExchanged: 0,
+        lastFallbackIndex: -1,
+        previousResponses: [],
         extractedIntelligence: {
           upiIds: [],
           phoneNumbers: [],
@@ -130,7 +132,13 @@ app.post("/honey-pot", authMiddleware, async (req, res) => {
       }
     }
 
+
     // ── 4. Check timeout before AI generation ──
+    const persona = PERSONAS[session.personaName] || PERSONAS.ramesh;
+    const enhancedSystemPrompt = getEnhancedSystemPrompt(
+      persona,
+      session.previousResponses || []
+    );
     if (Date.now() - requestStartTime > TIMEOUT_THRESHOLD) {
       console.warn("⏱️ Request approaching timeout, sending immediate response");
       return res.json({
@@ -138,13 +146,31 @@ app.post("/honey-pot", authMiddleware, async (req, res) => {
         reply: sanitizeReply("sir... ek minute... app slow hai..."),
       });
     }
-
-    // ── 5. Generate AI reply ──
-    const aiReply = await generateReply(
-      session.systemPrompt,
+    const replyData = await generateReply(
+      enhancedSystemPrompt,
       conversationHistory || [],
-      message.text
+      message.text,
+      session.personaName,
+      session.lastFallbackIndex,
+      session.previousResponses || []
     );
+
+    const aiReply = replyData.message;
+
+    // Track response history for anti-repetition
+    if (!session.previousResponses) session.previousResponses = [];
+    session.previousResponses.push({
+      text: aiReply,
+      timestamp: Date.now(),
+    });
+    if (session.previousResponses.length > 5) {
+      session.previousResponses = session.previousResponses.slice(-5);
+    }
+
+    // Update fallback index if a fallback was used
+    if (replyData.index !== -1) {
+      session.lastFallbackIndex = replyData.index;
+    }
 
     // ── 5. Update session ──
     session.totalMessagesExchanged += 1;
@@ -167,7 +193,6 @@ app.post("/honey-pot", authMiddleware, async (req, res) => {
     // Save session
     await setSession(sessionId, session);
 
-    // ── 6. Auto GUVI callback (fire-and-forget) ──
     // ── 6. Auto GUVI callback (fire-and-forget) ──
     // Trigger if:
     // (Scam Confirmed) AND

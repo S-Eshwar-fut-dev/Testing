@@ -1,21 +1,16 @@
 /**
- * Groq Client — wrapper around the OpenAI-compatible Groq API
- * for generating persona-based scambaiting replies.
- *
- * Migrated from @google/generative-ai to openai (Groq-compatible).
+ * Enhanced Groq Client with Response History Awareness
  */
 
 const OpenAI = require("openai");
+const { getContextualFallback } = require("./persona");
 
 let groqClient = null;
 
-/**
- * Initialize the Groq client (call once at startup).
- */
 function initGroq() {
   const apiKey = process.env.GROK_API_KEY;
   if (!apiKey || apiKey === "your_groq_api_key_here") {
-    console.warn("⚠️  GROK_API_KEY not set. AI replies will use fallback responses.");
+    console.warn("⚠️  GROK_API_KEY not set.");
     return;
   }
   groqClient = new OpenAI({
@@ -26,36 +21,28 @@ function initGroq() {
 }
 
 /**
- * Generate a minimal stalling phrase when all AI generation fails.
- * Uses randomized excuses to avoid repetition.
+ * Generate reply with anti-repetition awareness
+ * Now accepts previousResponses to avoid repetition
  */
-function generateMinimalStall() {
-  const excuses = ['connection', 'network', 'phone', 'app', 'battery'];
-  return `sir... ${excuses[Math.floor(Math.random() * excuses.length)]} problem...`;
-}
-
-/**
- * Generate a scambaiting reply using Groq.
- *
- * @param {string} systemPrompt - The persona system instruction
- * @param {Array} conversationHistory - Array of { sender, text } objects
- * @param {string} newMessage - The latest scammer message
- * @returns {Promise<string>} The AI-generated reply
- */
-async function generateReply(systemPrompt, conversationHistory, newMessage) {
-  // If Groq is not configured, use minimal stall
+async function generateReply(
+  systemPrompt,
+  conversationHistory,
+  newMessage,
+  personaName,
+  lastFallbackIndex,
+  previousResponses = []  // NEW PARAMETER
+) {
   if (!groqClient) {
-    console.warn("⚠️ Groq client not available, using minimal stall");
-    return generateMinimalStall();
+    console.warn("⚠️ Groq client not available, using persona fallback");
+    return getContextualFallback(personaName, lastFallbackIndex);
   }
 
   try {
-    // Build messages in OpenAI chat format
     const messages = [
       { role: "system", content: systemPrompt },
     ];
 
-    // Append conversation history
+    // Add conversation history
     for (const msg of conversationHistory || []) {
       messages.push({
         role: msg.sender === "scammer" ? "user" : "assistant",
@@ -63,60 +50,120 @@ async function generateReply(systemPrompt, conversationHistory, newMessage) {
       });
     }
 
-    // Append the new scammer message
+    // Add the new scammer message
     messages.push({ role: "user", content: newMessage });
 
     const completion = await groqClient.chat.completions.create({
       model: "llama-3.3-70b-versatile",
       messages,
-      temperature: 0.8,
+      temperature: 1.0,  // INCREASED from 0.9 for more variation
       max_tokens: 256,
-      timeout: 8000, // 8-second max for Vercel compatibility
+      timeout: 8000,
+      top_p: 0.95,  // ADD nucleus sampling for diversity
+      frequency_penalty: 0.7,  // PENALIZE repetition
+      presence_penalty: 0.6,   // ENCOURAGE new topics
     });
 
     const text = completion.choices?.[0]?.message?.content;
-    if (text) return text;
 
-    // If completion returned empty, try recovery
-    console.warn("⚠️ Primary model returned empty response, attempting recovery");
+    if (text && text.trim().length > 0) {
+      const cleanText = text.trim();
+
+      // 🚨 POST-GENERATION CHECK: Detect if AI is being repetitive
+      if (previousResponses.length >= 2) {
+        const lastTwo = previousResponses.slice(-2).map(r => r.text.toLowerCase());
+        const currentLower = cleanText.toLowerCase();
+
+        // Check for suspicious repetition patterns
+        const isRepetitive = lastTwo.some(prev => {
+          // If current response is >70% similar to previous ones
+          const similarity = calculateSimilarity(currentLower, prev);
+          return similarity > 0.7;
+        });
+
+        if (isRepetitive) {
+          console.warn("⚠️ Repetitive response detected, regenerating...");
+
+          // Try ONE more time with even higher temperature
+          const retryCompletion = await groqClient.chat.completions.create({
+            model: "llama-3.3-70b-versatile",
+            messages: [
+              {
+                role: "system",
+                content: `${systemPrompt}\n\n🚨 YOU ARE BEING REPETITIVE! Generate something COMPLETELY DIFFERENT from what you said before!`
+              },
+              ...messages.slice(1), // Skip old system message
+            ],
+            temperature: 1.2,  // VERY HIGH
+            max_tokens: 256,
+            timeout: 6000,
+            frequency_penalty: 1.0,
+            presence_penalty: 0.8,
+          });
+
+          const retryText = retryCompletion.choices?.[0]?.message?.content?.trim();
+          if (retryText && retryText.length > 0) {
+            console.log("✅ Regenerated with higher diversity");
+            return { message: retryText, index: -1 };
+          }
+        }
+      }
+
+      return { message: cleanText, index: -1 };
+    }
+
     throw new Error("Empty response from primary model");
+
   } catch (error) {
     console.error("❌ Primary Groq call failed:", error.message);
 
-    // Recovery attempt with smaller, faster model
+    // Recovery with smaller model
     try {
       const recovery = await groqClient.chat.completions.create({
         model: "llama-3.1-8b-instant",
         messages: [
-          { role: "system", content: "You are a confused Indian person talking to someone on the phone. Keep it under 10 words. Use simple Hindi-English mix." },
+          {
+            role: "system",
+            content: `You are stalling a scammer. Be creative and natural. Previous responses to AVOID repeating: ${previousResponses.slice(-2).map(r => r.text).join(', ')}. Generate something DIFFERENT. Under 15 words.`
+          },
           { role: "user", content: newMessage }
         ],
-        temperature: 0.9,
+        temperature: 1.1,
         max_tokens: 50,
-        timeout: 4000, // Tighter timeout for recovery
+        timeout: 4000,
+        frequency_penalty: 0.8,
       });
-      const recoveryText = recovery.choices?.[0]?.message?.content;
-      console.log("🔄 Recovery generation succeeded");
-      return recoveryText || generateMinimalStall();
+
+      const recoveryText = recovery.choices?.[0]?.message?.content?.trim();
+      if (recoveryText && recoveryText.length > 0) {
+        console.log("🔄 Recovery generation succeeded");
+        return { message: recoveryText, index: -1 };
+      }
     } catch (recoveryError) {
-      console.error("❌ Recovery generation failed:", recoveryError.message);
-      return generateMinimalStall();
+      console.error("❌ Recovery failed:", recoveryError.message);
     }
+
+    // Final fallback
+    console.warn("⚠️ Using persona-specific fallback");
+    return getContextualFallback(personaName, lastFallbackIndex);
   }
 }
 
 /**
- * Classify whether the conversation indicates a scam.
- * Uses Groq with a short classification prompt.
- *
- * @param {Array} conversationHistory - Array of { sender, text } objects
- * @param {string} latestMessage - The latest scammer message
- * @returns {Promise<boolean>} true if scam confirmed
+ * Calculate text similarity (Jaccard similarity)
  */
+function calculateSimilarity(text1, text2) {
+  const words1 = new Set(text1.split(/\s+/));
+  const words2 = new Set(text2.split(/\s+/));
+
+  const intersection = new Set([...words1].filter(w => words2.has(w)));
+  const union = new Set([...words1, ...words2]);
+
+  return intersection.size / union.size;
+}
+
 async function classifyScamIntent(conversationHistory, latestMessage) {
-  if (!groqClient) {
-    return false; // Can't classify without AI
-  }
+  if (!groqClient) return false;
 
   try {
     const transcript = (conversationHistory || [])
@@ -132,8 +179,7 @@ async function classifyScamIntent(conversationHistory, latestMessage) {
       messages: [
         {
           role: "system",
-          content:
-            "You are a scam detection classifier. Analyze the conversation below and determine if the sender is attempting a scam (phishing, fraud, social engineering, fake offers, etc.). Respond with ONLY the word YES or NO.",
+          content: "You are a scam detection classifier. Respond with ONLY YES or NO.",
         },
         { role: "user", content: prompt },
       ],
@@ -142,14 +188,12 @@ async function classifyScamIntent(conversationHistory, latestMessage) {
       timeout: 8000,
     });
 
-    const answer = (completion.choices?.[0]?.message?.content || "")
-      .trim()
-      .toUpperCase();
-
-    console.log(`🔍 Scam classification result: ${answer}`);
+    const answer = (completion.choices?.[0]?.message?.content || "").trim().toUpperCase();
+    console.log(`🔍 Scam classification: ${answer}`);
     return answer.startsWith("YES");
+
   } catch (error) {
-    console.error("❌ Scam classification error:", error.message);
+    console.error("❌ Classification error:", error.message);
     return false;
   }
 }
