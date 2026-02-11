@@ -3,6 +3,8 @@
 An AI-powered Agentic Honeypot for scam detection and intelligence extraction.
 Powered by Groq's `llama-3.3-70b-versatile` model.
 
+This project was built for the **GUVI Hackathon** to detect scam intent, engage scammers autonomously, and extract intelligence (UPI IDs, phone numbers, etc.).
+
 ## Setup & Installation
 
 1.  **Clone the repository:**
