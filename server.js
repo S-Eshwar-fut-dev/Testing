@@ -10,7 +10,7 @@ require("dotenv").config();
 const express = require("express");
 const { selectPersona } = require("./persona");
 const { extractIntelligence, mergeIntelligence } = require("./extractor");
-const { initGemini, generateReply, classifyScamIntent } = require("./gemini");
+const { initGroq, generateReply, classifyScamIntent } = require("./groq"); // Groq-powered (OpenAI-compatible)
 const { initRedis, getSession, setSession } = require("./redis");
 
 const app = express();
@@ -148,12 +148,12 @@ app.post("/honey-pot", authMiddleware, async (req, res) => {
     // Trigger if:
     // (Scam Confirmed) AND
     // (Messages >= Threshold OR (Messages >= 2 AND Critical Intelligence Found))
-    
+
     const hasCriticalIntel =
-        session.extractedIntelligence.upiIds.length > 0 ||
-        session.extractedIntelligence.phoneNumbers.length > 0 ||
-        session.extractedIntelligence.phishingLinks.length > 0 ||
-        session.extractedIntelligence.bankAccounts.length > 0;
+      session.extractedIntelligence.upiIds.length > 0 ||
+      session.extractedIntelligence.phoneNumbers.length > 0 ||
+      session.extractedIntelligence.phishingLinks.length > 0 ||
+      session.extractedIntelligence.bankAccounts.length > 0;
 
     const shouldTriggerCallback =
       session.scamDetected &&
@@ -170,7 +170,7 @@ app.post("/honey-pot", authMiddleware, async (req, res) => {
         console.error("❌ GUVI callback failed:", err.message);
         // Reset flag so it can retry next message
         session.callbackSent = false;
-        setSession(sessionId, session).catch(() => {});
+        setSession(sessionId, session).catch(() => { });
       });
     }
 
@@ -296,7 +296,7 @@ app.use((err, req, res, next) => {
 async function startServer() {
   try {
     // Initialize services
-    initGemini();
+    initGroq();
     await initRedis();
 
     if (require.main === module) {
