@@ -24,3 +24,10 @@ Powered by Groq's `llama-3.3-70b-versatile` model.
     ```bash
     npm start
     ```
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `GROK_API_KEY` | Groq API Key (starts with `gsk_`) |
+| `API_KEY` | Secret key for securing the `/honey-pot` endpoint. |
