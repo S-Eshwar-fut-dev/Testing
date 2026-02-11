@@ -31,3 +31,9 @@ Powered by Groq's `llama-3.3-70b-versatile` model.
 |----------|-------------|
 | `GROK_API_KEY` | Groq API Key (starts with `gsk_`) |
 | `API_KEY` | Secret key for securing the `/honey-pot` endpoint. |
+
+## API Endpoints
+
+- **POST /honey-pot**: Main endpoint for receiving scam messages.
+- **GET /session/:sessionId**: View session details.
+- **POST /finalize/:sessionId**: Manually trigger GUVI callback.
