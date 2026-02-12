@@ -6,6 +6,7 @@
 
 // Regex patterns
 const UPI_REGEX = /[a-zA-Z0-9.\-_]{2,}@[a-zA-Z]{2,}/g;
+const EMAIL_REGEX = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g;
 const PHONE_REGEX = /(?:\+91[\s\-]?)?[6-9]\d{9}/g;
 const URL_REGEX = /https?:\/\/[^\s"'<>]+/gi;
 const BANK_ACCOUNT_REGEX = /\b\d{4}[\s\-]?\d{4}[\s\-]?\d{4}(?:[\s\-]?\d{0,6})?\b/g;
@@ -47,6 +48,7 @@ const SUSPICIOUS_KEYWORDS = [
 function extractIntelligence(text) {
   if (!text || typeof text !== "string") {
     return {
+      emails: [],
       upiIds: [],
       phoneNumbers: [],
       phishingLinks: [],
@@ -57,11 +59,17 @@ function extractIntelligence(text) {
 
   const lowerText = text.toLowerCase();
 
-  // Extract UPI IDs (filter out emails - basic heuristic)
+  // Extract emails first
+  const emailMatches = text.match(EMAIL_REGEX) || [];
+  const emails = [...new Set(emailMatches.map((e) => e.toLowerCase()))];
+
+  // Extract UPI IDs (filter out emails)
   const upiMatches = text.match(UPI_REGEX) || [];
   const upiIds = upiMatches.filter((match) => {
+    const lower = match.toLowerCase();
+    // If it's already captured as an email, skip it
+    if (emails.includes(lower)) return false;
     const domain = match.split("@")[1].toLowerCase();
-    // Common UPI handles vs email domains
     const emailDomains = ["gmail", "yahoo", "hotmail", "outlook", "mail", "protonmail"];
     return !emailDomains.some((d) => domain.startsWith(d));
   });
@@ -82,6 +90,7 @@ function extractIntelligence(text) {
   );
 
   return {
+    emails: [...new Set(emails)],
     upiIds: [...new Set(upiIds)],
     phoneNumbers: [...new Set(phoneNumbers)],
     phishingLinks: [...new Set(phishingLinks)],
@@ -96,6 +105,7 @@ function extractIntelligence(text) {
  */
 function mergeIntelligence(existing, newData) {
   return {
+    emails: [...new Set([...existing.emails, ...newData.emails])],
     upiIds: [...new Set([...existing.upiIds, ...newData.upiIds])],
     phoneNumbers: [...new Set([...existing.phoneNumbers, ...newData.phoneNumbers])],
     phishingLinks: [...new Set([...existing.phishingLinks, ...newData.phishingLinks])],

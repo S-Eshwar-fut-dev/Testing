@@ -101,6 +101,7 @@ app.post("/honey-pot", authMiddleware, async (req, res) => {
         lastFallbackIndex: -1,
         previousResponses: [],
         extractedIntelligence: {
+          emails: [],
           upiIds: [],
           phoneNumbers: [],
           phishingLinks: [],
@@ -181,6 +182,7 @@ app.post("/honey-pot", authMiddleware, async (req, res) => {
 
     // Generate agent notes
     const detectedItems = [];
+    if (newIntel.emails.length > 0) detectedItems.push("emails");
     if (newIntel.upiIds.length > 0) detectedItems.push("UPI IDs");
     if (newIntel.phoneNumbers.length > 0) detectedItems.push("phone numbers");
     if (newIntel.phishingLinks.length > 0) detectedItems.push("phishing links");
