@@ -122,27 +122,33 @@ app.post("/honey-pot", authMiddleware, async (req, res) => {
     // ── 2. HYBRID INTELLIGENCE EXTRACTION (AI + Regex) ──
     console.log(`🔍 Starting hybrid extraction (AI-first)...`);
 
-    const newIntel = await hybridExtraction(
+    // CRITICAL: Extract from FULL conversation history
+    const { extractFromConversation } = require("./extractor-fixed");
+
+    // 1. Extract from conversation history (all scammer messages)
+    const historyIntel = extractFromConversation(conversationHistory || []);
+
+    // 2. Extract from current message
+    const currentIntel = await hybridExtraction(
       message.text,
       conversationHistory || [],
       extractIntelligence
     );
 
+    // 3. Merge both
     session.extractedIntelligence = mergeIntelligence(
       session.extractedIntelligence,
-      newIntel
+      mergeIntelligence(historyIntel, currentIntel)
     );
 
     // Log extraction results
-    const extractedCount = Object.values(newIntel).flat().length;
-    if (extractedCount > 0) {
-      console.log(`✅ Extracted ${extractedCount} items from this message`);
-      Object.entries(newIntel).forEach(([key, arr]) => {
-        if (arr.length > 0) {
-          console.log(`   - ${key}: ${arr.join(', ')}`);
-        }
-      });
-    }
+    const totalExtracted = Object.values(session.extractedIntelligence).flat().length;
+    console.log(`✅ Total extracted across conversation: ${totalExtracted} items`);
+    Object.entries(session.extractedIntelligence).forEach(([key, arr]) => {
+      if (arr.length > 0) {
+        console.log(`   - ${key}: ${arr.join(', ')}`);
+      }
+    });
 
     // ── 3. AI-based scam classification ──
     if (!session.scamDetected) {

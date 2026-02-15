@@ -273,22 +273,39 @@ function getEnhancedSystemPrompt(persona, previousResponses = []) {
   // PERIODIC INTELLIGENCE EXTRACTION STRATEGY
   // Every 3 messages, inject a specific instruction to extract more details.
   // The goal is to get: UPI ID, Bank Details, or a different Phone Number.
+  // EVERY 2 messages (not 3), ask for alternative methods
   const messageCount = previousResponses.length;
-  const isExtractionTurn = messageCount > 0 && messageCount % 3 === 0;
+  const isExtractionTurn = messageCount > 0 && messageCount % 2 === 0;
 
   if (isExtractionTurn) {
-    prompt += `\n\n🚨 MISSION UPDATE: EXTRACTION PHASE 🚨
-    1.  IGNORE their last instruction for a moment.
-    2.  Pretend the previous detail they gave (Phone Number/Link/Account) is NOT WORKING or showing an error.
-    3.  Ask for an ALTERNATIVE way to pay or connect.
-    
-    EXAMPLES:
-    - "Sir calling that number but saying out of service... give me UPI ID instead?"
-    - "Link not opening... can you send QR code photo?"
-    - "Payment failed to that account... do you have Google Pay number?"
-    - "Server error coming... is there another website?"
-    
-    GOAL: Get a NEW piece of information (UPI, QR, different Phone) to track them.`;
+    prompt += `\n\n🚨 INTELLIGENCE EXTRACTION PHASE 🚨
+CRITICAL MISSION: Extract MORE information from the scammer!
+
+STRATEGY: Pretend something isn't working and ask for ALTERNATIVES:
+
+1. If they gave a PHONE NUMBER:
+   - "Sir, I tried calling but number not working... do you have WhatsApp number?"
+   - "Sir calling giving busy tone... any other number or UPI to contact?"
+
+2. If they gave a UPI ID:
+   - "Sir payment to that UPI failed... give me your phone number to call bank?"
+   - "UPI showing error... can you share QR code or bank account number?"
+
+3. If they gave a LINK:
+   - "Sir link not opening... can you give phone number so I can call?"
+   - "Website showing error... any alternative website or UPI ID?"
+
+4. If they haven't shared anything yet:
+   - "Sir before I share OTP, can you give me your employee ID and phone number for my records?"
+   - "Sir my son asking me to verify... what is your official contact number?"
+
+YOUR GOAL: Make them give you:
+- Phone number (if not already given)
+- UPI ID (if not already given)  
+- Alternative contact method
+- Any other identifying information
+
+BE NATURAL - don't make it obvious you're extracting. Sound worried and cautious.`;
   }
 
   if (previousResponses.length > 0) {

@@ -39,35 +39,39 @@ async function extractWithAI(messageText, conversationHistory = []) {
 
     const extractionPrompt = `You are an intelligence extraction system for a scam detection honeypot.
 
-Analyze this conversation and extract ALL scam-related intelligence.
+CRITICAL TASK: Extract ALL scam-related intelligence from this ENTIRE conversation.
 
 ${fullContext}
 
-Extract and return ONLY a JSON object with these fields (return empty arrays if nothing found):
-{
-  "phoneNumbers": [],      // Phone numbers in ANY format (with +91, spaces, dashes, etc.)
-  "upiIds": [],           // UPI IDs (format: name@bank or similar)
-  "bankAccounts": [],     // Bank account numbers (10-18 digits)
-  "phishingLinks": [],    // Any URLs or website links
-  "emails": [],           // Email addresses
-  "suspiciousKeywords": [] // Scam indicators: "urgent", "otp", "verify", "blocked", etc.
-}
+ANALYZE EVERY MESSAGE from the scammer and extract:
+1. Phone numbers (ANY format: +91-9876543210, 9876543210, etc.)
+2. UPI IDs (format: name@bank like fraud@paytm, scammer.fake@upi)
+3. Bank account numbers (10-18 digits)
+4. URLs and links (http://, https://, www., or domains)
+5. Email addresses
+6. Scam keywords (urgent, OTP, block, verify, etc.)
 
 CRITICAL RULES:
-1. Extract EXACT values as they appear (don't modify phone numbers, UPIs, etc.)
-2. Include items even if you're unsure - we'll validate later
-3. For phone numbers: catch ALL formats (+91-9876543210, 9876543210, +91 98765 43210)
-4. For UPI: anything with @ symbol that looks like payment ID
-5. For bank accounts: sequences of 10-18 digits (could have spaces/dashes)
-6. For links: any http://, https://, or domain-like patterns
-7. Return ONLY the JSON object, no explanation
+1. Extract EXACT values - don't modify anything
+2. Look at EVERY message in the conversation, not just the last one
+3. If scammer mentions something multiple times, extract it
+4. Phone numbers can be: +91-9876543210, 9876543210, +91 98765 43210
+5. UPI IDs have @ symbol: scammer@paytm, fraud.pay@ybl, name.name@bank
+6. Return ONLY valid JSON
+
+Return ONLY this JSON structure (no markdown, no explanation):
+{
+  "phoneNumbers": [],
+  "upiIds": [],
+  "bankAccounts": [],
+  "phishingLinks": [],
+  "emails": [],
+  "suspiciousKeywords": []
+}
 
 EXAMPLES:
-Input: "Call me at +91-9876543210 or pay to scammer@paytm"
-Output: {"phoneNumbers":["+91-9876543210"],"upiIds":["scammer@paytm"],"bankAccounts":[],"phishingLinks":[],"emails":[],"suspiciousKeywords":["call","pay"]}
-
-Input: "Visit http://fake-bank.com and enter account 1234567890123456"
-Output: {"phoneNumbers":[],"upiIds":[],"bankAccounts":["1234567890123456"],"phishingLinks":["http://fake-bank.com"],"emails":[],"suspiciousKeywords":["visit","enter","account"]}`;
+Conversation: "Call +91-9876543210 or pay to scammer@paytm"
+Output: {"phoneNumbers":["+91-9876543210"],"upiIds":["scammer@paytm"],"bankAccounts":[],"phishingLinks":[],"emails":[],"suspiciousKeywords":["call","pay"]}`;
 
     console.log("🤖 Calling AI Extractor...");
 
