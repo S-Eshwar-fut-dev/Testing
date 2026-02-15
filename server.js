@@ -1,15 +1,9 @@
-/**
- * Vista Honeypot — Agentic Honey-Pot for Scam Detection
- *
- * Express server that receives scammer messages, engages them
- * with a dynamic AI persona, and extracts intelligence.
- */
-
 require("dotenv").config();
 
 const express = require("express");
 const { selectPersona, PERSONAS, getEnhancedSystemPrompt } = require("./persona");
-const { extractIntelligence, mergeIntelligence } = require("./extractor");
+const { extractIntelligence, mergeIntelligence } = require("./extractor-enhanced");
+const { initAIExtractor, hybridExtraction } = require("./ai-extractor");
 const { initOpenAI, generateReply, classifyScamIntent } = require("./openai");
 const { initRedis, getSession, setSession } = require("./redis");
 const {
@@ -30,7 +24,6 @@ app.use(express.json());
 
 /**
  * API Key authentication middleware.
- * Validates x-api-key header against API_KEY env variable.
  */
 function authMiddleware(req, res, next) {
   const apiKey = req.headers["x-api-key"];
@@ -52,7 +45,6 @@ function authMiddleware(req, res, next) {
 
 /**
  * Validates and sanitizes AI reply before sending to client.
- * Ensures every response has a non-empty string reply.
  */
 function sanitizeReply(reply) {
   if (!reply || typeof reply !== 'string' || reply.trim().length === 0) {
@@ -68,8 +60,9 @@ function sanitizeReply(reply) {
 app.get("/", (req, res) => {
   res.json({
     status: "ok",
-    service: "Vista Honeypot — Scam Detection Agent",
+    service: "Vista Honeypot — AI-Powered Scam Detection Agent",
     timestamp: new Date().toISOString(),
+    version: "2.0-AI-Enhanced",
   });
 });
 
@@ -77,11 +70,11 @@ app.get("/", (req, res) => {
  * POST /honey-pot
  *
  * Main endpoint: receives scammer messages, generates persona-based
- * replies, and extracts intelligence.
+ * replies, and extracts intelligence using AI-first hybrid approach.
  */
 app.post("/honey-pot", authMiddleware, async (req, res) => {
   const requestStartTime = Date.now();
-  const TIMEOUT_THRESHOLD = 9000; // 9 seconds (leave 1s buffer for Vercel)
+  const TIMEOUT_THRESHOLD = 9000; // 9 seconds
 
   try {
     const { sessionId, message, conversationHistory } = req.body;
@@ -93,6 +86,11 @@ app.post("/honey-pot", authMiddleware, async (req, res) => {
     if (!message || !message.text) {
       return res.status(400).json({ error: "message.text is required." });
     }
+
+    console.log(`\n${'='.repeat(80)}`);
+    console.log(`📨 Incoming message for session: ${sessionId}`);
+    console.log(`📝 Message: "${message.text}"`);
+    console.log(`${'='.repeat(80)}`);
 
     // ── 1. Check session & assign persona ──
     let session = await getSession(sessionId);
@@ -116,18 +114,37 @@ app.post("/honey-pot", authMiddleware, async (req, res) => {
         },
         scamDetected: false,
         agentNotes: "",
+        sessionStartTime: Date.now(),
       };
-      console.log(`🎭 New session ${sessionId} → Persona: ${persona.name}`);
+      console.log(`🎭 New session → Persona: ${persona.name}`);
     }
 
-    // ── 2. Extract intelligence from incoming message ──
-    const newIntel = extractIntelligence(message.text);
+    // ── 2. HYBRID INTELLIGENCE EXTRACTION (AI + Regex) ──
+    console.log(`🔍 Starting hybrid extraction (AI-first)...`);
+
+    const newIntel = await hybridExtraction(
+      message.text,
+      conversationHistory || [],
+      extractIntelligence
+    );
+
     session.extractedIntelligence = mergeIntelligence(
       session.extractedIntelligence,
       newIntel
     );
 
-    // ── 3. AI-based scam classification (only if not already confirmed) ──
+    // Log extraction results
+    const extractedCount = Object.values(newIntel).flat().length;
+    if (extractedCount > 0) {
+      console.log(`✅ Extracted ${extractedCount} items from this message`);
+      Object.entries(newIntel).forEach(([key, arr]) => {
+        if (arr.length > 0) {
+          console.log(`   - ${key}: ${arr.join(', ')}`);
+        }
+      });
+    }
+
+    // ── 3. AI-based scam classification ──
     if (!session.scamDetected) {
       const isScam = await classifyScamIntent(
         conversationHistory || [],
@@ -139,13 +156,7 @@ app.post("/honey-pot", authMiddleware, async (req, res) => {
       }
     }
 
-
     // ── 4. Check timeout before AI generation ──
-    const persona = PERSONAS[session.personaName] || PERSONAS.ramesh;
-    const enhancedSystemPrompt = getEnhancedSystemPrompt(
-      persona,
-      session.previousResponses || []
-    );
     if (Date.now() - requestStartTime > TIMEOUT_THRESHOLD) {
       console.warn("⏱️ Request approaching timeout, sending immediate response");
       return res.json({
@@ -154,8 +165,14 @@ app.post("/honey-pot", authMiddleware, async (req, res) => {
       });
     }
 
-    console.log(`🎭 Session ${sessionId}: Using persona ${session.personaName}`);
-    console.log(`📊 Session stats: ${session.totalMessagesExchanged} messages, scam detected: ${session.scamDetected}`);
+    // ── 5. Generate AI persona response ──
+    console.log(`🎭 Generating response with ${session.personaName} persona...`);
+
+    const persona = PERSONAS[session.personaName] || PERSONAS.ramesh;
+    const enhancedSystemPrompt = getEnhancedSystemPrompt(
+      persona,
+      session.previousResponses || []
+    );
 
     const replyData = await generateReply(
       enhancedSystemPrompt,
@@ -168,25 +185,12 @@ app.post("/honey-pot", authMiddleware, async (req, res) => {
 
     const aiReply = replyData.message;
 
-    // ═══ STRATEGIC ENHANCEMENTS ═══
-    const urgencyLevel = session.extractedIntelligence.urgencyLevel;
+    // ── 6. Strategic enhancements ──
+    const urgencyLevel = session.extractedIntelligence.suspiciousKeywords.length;
     const enhancedReply = addRealisticMistakes(aiReply, urgencyLevel);
     const finalReply = addCulturalContext(enhancedReply, session.personaName);
 
-    const realisticDelay = calculateRealisticDelay(
-      message.text,
-      session.totalMessagesExchanged
-    );
-    console.log(`⏱️ Realistic delay would be: ${realisticDelay}ms`);
-
-    const strategy = getAdaptiveStrategy(
-      message.text,
-      session.totalMessagesExchanged
-    );
-    console.log(`🎯 Strategy: ${JSON.stringify(strategy)}`);
-
-    console.log(`✅ Reply generated: "${finalReply}"`);
-    console.log(`🔢 Fallback index: ${replyData.index}`);
+    console.log(`✅ Final reply: "${finalReply}"`);
 
     // Track response history
     if (!session.previousResponses) session.previousResponses = [];
@@ -200,33 +204,30 @@ app.post("/honey-pot", authMiddleware, async (req, res) => {
       session.lastFallbackIndex = replyData.index;
     }
 
-    // ── 5. Update session ──
+    // ── 7. Update session ──
     session.totalMessagesExchanged += 1;
 
-    // ═══ GENERATE AGENT NOTES ═══
+    // ── 8. Generate agent notes ──
     const intel = session.extractedIntelligence;
     const detectedItems = [];
 
     if (intel.emails.length > 0) detectedItems.push(`Emails: ${intel.emails.join(", ")}`);
-    if (intel.upiIds.length > 0) detectedItems.push(`UPI IDs: ${intel.upiIds.join(", ")}`);
+    if (intel.upiIds.length > 0) detectedItems.push(`UPI: ${intel.upiIds.join(", ")}`);
     if (intel.phoneNumbers.length > 0) detectedItems.push(`Phone: ${intel.phoneNumbers.join(", ")}`);
-    if (intel.phishingLinks.length > 0) detectedItems.push(`Phishing links: ${intel.phishingLinks.length}`);
-    if (intel.bankAccounts.length > 0) detectedItems.push(`Bank accounts: ${intel.bankAccounts.length}`);
-    if (intel.suspiciousKeywords.length > 0) detectedItems.push(`Keywords: ${intel.suspiciousKeywords.join(", ")}`);
+    if (intel.phishingLinks.length > 0) detectedItems.push(`Links: ${intel.phishingLinks.length}`);
+    if (intel.bankAccounts.length > 0) detectedItems.push(`Accounts: ${intel.bankAccounts.length}`);
+    if (intel.suspiciousKeywords.length > 0) detectedItems.push(`Keywords: ${intel.suspiciousKeywords.slice(0, 5).join(", ")}`);
 
     detectedItems.push(`Persona: ${session.personaName}`);
-    detectedItems.push(`Messages: ${session.totalMessagesExchanged}`);
+    detectedItems.push(`Turns: ${session.totalMessagesExchanged}`);
+    detectedItems.push(`Scam: ${session.scamDetected ? 'YES' : 'NO'}`);
 
     session.agentNotes = detectedItems.join(" | ");
 
     // Save session
     await setSession(sessionId, session);
 
-    // ── 6. Auto GUVI callback (fire-and-forget) ──
-    // Trigger if:
-    // (Scam Confirmed) AND
-    // (Messages >= Threshold OR (Messages >= 2 AND Critical Intelligence Found))
-
+    // ── 9. Auto GUVI callback logic ──
     const hasCriticalIntel =
       session.extractedIntelligence.upiIds.length > 0 ||
       session.extractedIntelligence.phoneNumbers.length > 0 ||
@@ -238,9 +239,11 @@ app.post("/honey-pot", authMiddleware, async (req, res) => {
       session.scamDetected &&
       !session.callbackSent &&
       (session.totalMessagesExchanged >= CALLBACK_THRESHOLD ||
-        (session.totalMessagesExchanged >= 2 && hasCriticalIntel));
+        (session.totalMessagesExchanged >= 3 && hasCriticalIntel));
 
     if (shouldTriggerCallback) {
+      console.log(`📤 Triggering GUVI callback (messages: ${session.totalMessagesExchanged}, intel: ${hasCriticalIntel})`);
+
       // Mark as sent BEFORE the async call to prevent duplicates
       session.callbackSent = true;
       await setSession(sessionId, session);
@@ -253,15 +256,16 @@ app.post("/honey-pot", authMiddleware, async (req, res) => {
       });
     }
 
-    // ── 7. Send simple response ──
+    // ── 10. Send response ──
     return res.json({
       status: "success",
       reply: sanitizeReply(finalReply),
     });
+
   } catch (error) {
     console.error("❌ /honey-pot error:", error);
     return res.status(500).json({
-      error: "Internal server error. The honeypot agent encountered an issue.",
+      error: "Internal server error.",
       details: error.message,
     });
   }
@@ -269,7 +273,7 @@ app.post("/honey-pot", authMiddleware, async (req, res) => {
 
 /**
  * GET /session/:sessionId
- * Retrieve full session data (persona, intelligence, message count).
+ * Retrieve full session data.
  */
 app.get("/session/:sessionId", authMiddleware, async (req, res) => {
   try {
@@ -295,7 +299,7 @@ app.get("/session/:sessionId", authMiddleware, async (req, res) => {
 
 /**
  * GET /analytics/:sessionId
- * Advanced analytics for judges — shows sophistication.
+ * Advanced analytics for judges.
  */
 app.get("/analytics/:sessionId", authMiddleware, async (req, res) => {
   try {
@@ -306,6 +310,9 @@ app.get("/analytics/:sessionId", authMiddleware, async (req, res) => {
     }
 
     const intel = session.extractedIntelligence;
+    const duration = session.sessionStartTime
+      ? Math.floor((Date.now() - session.sessionStartTime) / 1000)
+      : 0;
 
     const engagementScore = Math.min(
       (session.totalMessagesExchanged * 10) +
@@ -324,6 +331,7 @@ app.get("/analytics/:sessionId", authMiddleware, async (req, res) => {
         engagementScore,
         messagesExchanged: session.totalMessagesExchanged,
         scamDetected: session.scamDetected,
+        durationSeconds: duration,
       },
 
       intelligence: {
@@ -341,8 +349,9 @@ app.get("/analytics/:sessionId", authMiddleware, async (req, res) => {
         dataExtracted:
           intel.upiIds.length +
           intel.phoneNumbers.length +
-          intel.emails.length,
-        scamDetected: session.scamDetected,
+          intel.emails.length +
+          intel.bankAccounts.length +
+          intel.phishingLinks.length,
       },
     });
   } catch (error) {
@@ -376,7 +385,10 @@ app.post("/finalize/:sessionId", authMiddleware, async (req, res) => {
     });
   } catch (error) {
     console.error("❌ /finalize error:", error);
-    return res.status(500).json({ error: "Internal server error.", details: error.message });
+    return res.status(500).json({
+      error: "Internal server error.",
+      details: error.message
+    });
   }
 });
 
@@ -387,16 +399,21 @@ const GUVI_CALLBACK_URL =
 
 /**
  * Send the final intelligence payload to GUVI evaluation endpoint.
- * @param {string} sessionId
- * @param {Object} session
- * @returns {Promise<{ payload: Object, guviResponse: Object }>}
  */
 async function sendGuviCallback(sessionId, session) {
+  const duration = session.sessionStartTime
+    ? Math.floor((Date.now() - session.sessionStartTime) / 1000)
+    : 120;
+
   const payload = {
     sessionId,
     scamDetected: session.scamDetected,
     totalMessagesExchanged: session.totalMessagesExchanged,
     extractedIntelligence: session.extractedIntelligence,
+    engagementMetrics: {
+      totalMessagesExchanged: session.totalMessagesExchanged,
+      engagementDurationSeconds: duration,
+    },
     agentNotes: session.agentNotes,
   };
 
@@ -433,16 +450,27 @@ app.use((err, req, res, next) => {
 async function startServer() {
   try {
     // Initialize services
+    console.log("🚀 Initializing Vista Honeypot v2.0 (AI-Enhanced)...\n");
+
     initOpenAI();
+    const aiExtractorReady = initAIExtractor();
     await initRedis();
+
+    if (!aiExtractorReady) {
+      console.warn("⚠️  AI Extractor unavailable - will use regex-only mode");
+    }
 
     if (require.main === module) {
       app.listen(PORT, () => {
-        console.log(`\n🍯 Vista Honeypot server running on http://localhost:${PORT}`);
-        console.log(`   POST /honey-pot         — Main scambaiting endpoint`);
-        console.log(`   GET  /session/:sessionId — View session data`);
-        console.log(`   GET  /analytics/:sessionId — Advanced analytics`);
-        console.log(`   POST /finalize/:sessionId — Generate Guvi payload\n`);
+        console.log(`\n${'='.repeat(80)}`);
+        console.log(`🍯 Vista Honeypot v2.0 (AI-Enhanced) running on http://localhost:${PORT}`);
+        console.log(`${'='.repeat(80)}`);
+        console.log(`   POST /honey-pot              — Main scambaiting endpoint`);
+        console.log(`   GET  /session/:sessionId     — View session data`);
+        console.log(`   GET  /analytics/:sessionId   — Advanced analytics`);
+        console.log(`   POST /finalize/:sessionId    — Manual GUVI callback\n`);
+        console.log(`🤖 AI Extraction: ${aiExtractorReady ? 'ENABLED' : 'DISABLED (regex fallback)'}`);
+        console.log(`${'='.repeat(80)}\n`);
       });
     }
   } catch (error) {
