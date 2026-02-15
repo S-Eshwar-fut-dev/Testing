@@ -174,10 +174,11 @@ app.post("/honey-pot", authMiddleware, async (req, res) => {
     // ── 5. Generate AI persona response ──
     console.log(`🎭 Generating response with ${session.personaName} persona...`);
 
-    const persona = PERSONAS[session.personaName] || PERSONAS.ramesh;
+    const persona = PERSONAS[session.personaName] || PERSONAS.SmartVictim;
     const enhancedSystemPrompt = getEnhancedSystemPrompt(
       persona,
-      session.previousResponses || []
+      session.previousResponses || [],
+      session.extractedIntelligence || {}
     );
 
     const replyData = await generateReply(

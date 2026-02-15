@@ -2,9 +2,6 @@ const OpenAI = require("openai");
 
 let openaiClient = null;
 
-/**
- * Initialize OpenAI client for AI extraction
- */
 function initAIExtractor() {
   const apiKey = (process.env.OPENAI_API_KEY || "").trim();
   if (!apiKey || apiKey === "your_openai_api_key_here") {
@@ -12,54 +9,43 @@ function initAIExtractor() {
     return false;
   }
   openaiClient = new OpenAI({ apiKey });
-  console.log("✅ AI Extractor initialized with GPT-4o-mini");
+  console.log("✅ AI Extractor initialized with gpt-4o-mini");
   return true;
 }
 
-/**
- * AI-powered intelligence extraction
- * Analyzes message and conversation history to extract scam intelligence
- */
-async function extractWithAI(messageText, conversationHistory = []) {
-  if (!openaiClient) {
-    console.warn("⚠️ AI Extractor not available, skipping AI extraction");
-    return null;
-  }
+function buildFullContext(messageText, conversationHistory = []) {
+  const recent = (conversationHistory || [])
+    .slice(-20)
+    .map(m => `${m.sender}: ${m.text}`)
+    .join("\n");
+  return recent
+    ? `Conversation (recent messages):\n${recent}\n\nNew message:\nscammer: ${messageText}`
+    : `scammer: ${messageText}`;
+}
 
-  try {
-    // Build context from conversation history
-    const context = conversationHistory
-      .slice(-5) // Last 5 messages for context
-      .map(msg => `${msg.sender}: ${msg.text}`)
-      .join("\n");
+function buildExtractionPrompt(fullContext) {
+  return `You are a precision intelligence extraction system for scam detection. The input is a transcript provided by the user (defensive use only). DO NOT attempt to contact or engage with the sender.
 
-    const fullContext = context
-      ? `Previous conversation:\n${context}\n\nNew message:\nscammer: ${messageText}`
-      : `scammer: ${messageText}`;
-
-    const extractionPrompt = `You are an intelligence extraction system for a scam detection honeypot.
-
-CRITICAL TASK: Extract ALL scam-related intelligence from this ENTIRE conversation.
+TASK: Extract ALL scam-related data from this conversation.
 
 ${fullContext}
 
-ANALYZE EVERY MESSAGE from the scammer and extract:
-1. Phone numbers (ANY format: +91-9876543210, 9876543210, etc.)
-2. UPI IDs (format: name@bank like fraud@paytm, scammer.fake@upi)
-3. Bank account numbers (10-18 digits)
-4. URLs and links (http://, https://, www., or domains)
-5. Email addresses
-6. Scam keywords (urgent, OTP, block, verify, etc.)
+EXTRACT THESE 6 TYPES ONLY (exact keys & types):
+
+1. phoneNumbers: array of exact phone strings found (any format)
+2. upiIds: array of exact UPI IDs (format like name@bank)
+3. bankAccounts: array of exact bank account numbers (10-18 digits)
+4. phishingLinks: array of exact URLs / domains found
+5. emails: array of exact email addresses
+6. suspiciousKeywords: array of exact suspicious words as they appear (lowercase preferred)
 
 CRITICAL RULES:
-1. Extract EXACT values - don't modify anything
-2. Look at EVERY message in the conversation, not just the last one
-3. If scammer mentions something multiple times, extract it
-4. Phone numbers can be: +91-9876543210, 9876543210, +91 98765 43210
-5. UPI IDs have @ symbol: scammer@paytm, fraud.pay@ybl, name.name@bank
-6. Return ONLY valid JSON
+- Extract EXACT values found; do NOT invent or normalize beyond trimming.
+- Look at EVERY message in the conversation.
+- If an item appears multiple times, include it once.
+- Return ONLY valid JSON corresponding exactly to the structure below (no markdown, no explanation).
 
-Return ONLY this JSON structure (no markdown, no explanation):
+OUTPUT JSON FORMAT:
 {
   "phoneNumbers": [],
   "upiIds": [],
@@ -69,69 +55,69 @@ Return ONLY this JSON structure (no markdown, no explanation):
   "suspiciousKeywords": []
 }
 
-EXAMPLES:
-Conversation: "Call +91-9876543210 or pay to scammer@paytm"
-Output: {"phoneNumbers":["+91-9876543210"],"upiIds":["scammer@paytm"],"bankAccounts":[],"phishingLinks":[],"emails":[],"suspiciousKeywords":["call","pay"]}`;
+If a field is empty, return an empty array.`;
+}
 
-    console.log("🤖 Calling AI Extractor...");
+async function extractWithAI(messageText, conversationHistory = [], timeoutMs = 10000) {
+  if (!openaiClient) {
+    console.warn("⚠️ AI Extractor not available, skipping AI extraction");
+    return null;
+  }
 
+  const fullContext = buildFullContext(messageText, conversationHistory);
+  const prompt = buildExtractionPrompt(fullContext);
+
+  try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-    const completion = await openaiClient.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "system",
-          content: "You are a precise intelligence extraction system. Return ONLY valid JSON, no markdown, no explanation."
-        },
-        {
-          role: "user",
-          content: extractionPrompt
-        }
-      ],
-      temperature: 0.1, // Low temperature for consistency
-      max_completion_tokens: 300,
-    }, { signal: controller.signal });
+    const completion = await openaiClient.chat.completions.create(
+      {
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are a precise intelligence extraction system. Return ONLY valid JSON with the exact schema requested; no markdown or commentary."
+          },
+          { role: "user", content: prompt }
+        ],
+        temperature: 0.0,
+        max_completion_tokens: 800
+      },
+      { signal: controller.signal }
+    );
 
     clearTimeout(timeoutId);
 
-    const responseText = completion.choices?.[0]?.message?.content?.trim();
-
+    const responseText = completion?.choices?.[0]?.message?.content?.trim();
     if (!responseText) {
       console.warn("⚠️ AI Extractor returned empty response");
       return null;
     }
 
-    // Clean the response (remove markdown code blocks if present)
-    let cleanedText = responseText
-      .replace(/```json\s*/g, '')
-      .replace(/```\s*/g, '')
-      .trim();
+    const cleaned = responseText.replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, "").trim();
 
-    // Parse JSON
-    const extracted = JSON.parse(cleanedText);
-
-    // Validate structure
-    if (!extracted || typeof extracted !== 'object') {
-      console.warn("⚠️ AI Extractor returned invalid structure");
+    let parsed;
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch (err) {
+      console.error("❌ AI Extractor returned non-JSON or malformed JSON:", err.message);
       return null;
     }
 
-    // Ensure all fields exist as arrays
-    const result = {
-      phoneNumbers: Array.isArray(extracted.phoneNumbers) ? extracted.phoneNumbers : [],
-      upiIds: Array.isArray(extracted.upiIds) ? extracted.upiIds : [],
-      bankAccounts: Array.isArray(extracted.bankAccounts) ? extracted.bankAccounts : [],
-      phishingLinks: Array.isArray(extracted.phishingLinks) ? extracted.phishingLinks : [],
-      emails: Array.isArray(extracted.emails) ? extracted.emails : [],
-      suspiciousKeywords: Array.isArray(extracted.suspiciousKeywords) ? extracted.suspiciousKeywords : [],
+    const normalized = {
+      phoneNumbers: Array.isArray(parsed.phoneNumbers) ? parsed.phoneNumbers : [],
+      upiIds: Array.isArray(parsed.upiIds) ? parsed.upiIds : [],
+      bankAccounts: Array.isArray(parsed.bankAccounts) ? parsed.bankAccounts : [],
+      phishingLinks: Array.isArray(parsed.phishingLinks) ? parsed.phishingLinks : [],
+      emails: Array.isArray(parsed.emails) ? parsed.emails : [],
+      suspiciousKeywords: Array.isArray(parsed.suspiciousKeywords) ? parsed.suspiciousKeywords : []
     };
 
-    // Log what we found
-    const foundItems = Object.entries(result)
-      .filter(([_, arr]) => arr.length > 0)
-      .map(([key, arr]) => `${key}: ${arr.length}`)
+    const foundItems = Object.entries(normalized)
+      .filter(([, arr]) => arr.length > 0)
+      .map(([k, arr]) => `${k}:${arr.length}`)
       .join(", ");
 
     if (foundItems) {
@@ -140,51 +126,93 @@ Output: {"phoneNumbers":["+91-9876543210"],"upiIds":["scammer@paytm"],"bankAccou
       console.log("ℹ️ AI Extractor found no intelligence in this message");
     }
 
-    return result;
-
+    return normalized;
   } catch (error) {
-    if (error.name === 'AbortError') {
-      console.error("❌ AI Extractor timeout (>5s)");
-    } else if (error instanceof SyntaxError) {
-      console.error("❌ AI Extractor returned invalid JSON:", error.message);
+    if (error.name === "AbortError") {
+      console.error("❌ AI Extractor timeout (aborted)");
     } else {
-      console.error("❌ AI Extractor error:", error.message);
+      console.error("❌ AI Extractor error:", error.message || error);
     }
     return null;
   }
 }
 
-/**
- * Hybrid extraction: AI first, then merge with regex fallback
- */
-async function hybridExtraction(messageText, conversationHistory, regexExtractor) {
-  // Try AI extraction first
-  const aiResult = await extractWithAI(messageText, conversationHistory);
+function regexExtractor(messageText, conversationHistory = []) {
+  const fullText = [...(conversationHistory || []).map(m => m.text), messageText].join("\n");
 
-  // Always run regex as backup/validation
-  const regexResult = regexExtractor(messageText);
+  const phonePatterns = [
+    /\+?\d{1,3}[-\s.]?\d{2,4}[-\s.]?\d{3,4}[-\s.]?\d{3,4}/g,
+    /\b\d{10,11}\b/g,
+    /\b\d{5}[-\s]\d{5}\b/g
+  ];
 
-  // If AI failed, use regex only
+  const phoneNumbers = new Set();
+  phonePatterns.forEach(rx => {
+    const m = fullText.match(rx);
+    if (m) m.forEach(s => phoneNumbers.add(s.trim()));
+  });
+
+  const emailRx = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
+  const emails = new Set((fullText.match(emailRx) || []).map(s => s.trim()));
+
+  const upiRx = /\b[a-zA-Z0-9._%+-]{2,}@[a-zA-Z]{2,}\b/g;
+  const upiCandidates = new Set((fullText.match(upiRx) || []).map(s => s.trim()));
+  const upiIds = new Set([...upiCandidates].filter(c => !/\@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(c)));
+
+  const bankRx = /\b\d{10,18}\b/g;
+  const bankAccounts = new Set((fullText.match(bankRx) || []).map(s => s.trim()));
+
+  const urlRx = /((https?:\/\/|www\.)[^\s"'<>]+)|\b[a-z0-9.-]+\.(com|net|org|in|io|co|info|biz|xyz)\b/ig;
+  const phishingLinks = new Set();
+  let urlMatch;
+  while ((urlMatch = urlRx.exec(fullText)) !== null) {
+    phishingLinks.add(urlMatch[0].trim());
+  }
+
+  const suspiciousList = [
+    "urgent", "otp", "verify", "verification", "blocked", "block", "immediately",
+    "download", "install", "suspended", "winner", "prize", "fee", "transfer",
+    "account blocked", "call immediately", "pay", "deposit", "tax", "fine", "penalty"
+  ];
+  const suspiciousKeywords = new Set();
+  const lowered = fullText.toLowerCase();
+  suspiciousList.forEach(word => {
+    if (lowered.includes(word)) {
+      suspiciousKeywords.add(word);
+    }
+  });
+
+  return {
+    phoneNumbers: Array.from(phoneNumbers),
+    upiIds: Array.from(upiIds),
+    bankAccounts: Array.from(bankAccounts),
+    phishingLinks: Array.from(phishingLinks),
+    emails: Array.from(emails),
+    suspiciousKeywords: Array.from(suspiciousKeywords)
+  };
+}
+
+async function hybridExtraction(messageText, conversationHistory = [], options = {}) {
+  const aiResult = await extractWithAI(messageText, conversationHistory, options.aiTimeoutMs ?? 10000);
+  const regexResult = regexExtractor(messageText, conversationHistory);
+
   if (!aiResult) {
     console.log("⚠️ Using regex-only extraction (AI failed)");
     return regexResult;
   }
 
-  // Merge results: AI primary, regex fills gaps
   const merged = {
-    phoneNumbers: [...new Set([...aiResult.phoneNumbers, ...regexResult.phoneNumbers])],
-    upiIds: [...new Set([...aiResult.upiIds, ...regexResult.upiIds])],
-    bankAccounts: [...new Set([...aiResult.bankAccounts, ...regexResult.bankAccounts])],
-    phishingLinks: [...new Set([...aiResult.phishingLinks, ...regexResult.phishingLinks])],
-    emails: [...new Set([...aiResult.emails, ...regexResult.emails])],
-    suspiciousKeywords: [...new Set([...aiResult.suspiciousKeywords, ...regexResult.suspiciousKeywords])],
+    phoneNumbers: Array.from(new Set([...aiResult.phoneNumbers, ...regexResult.phoneNumbers])),
+    upiIds: Array.from(new Set([...aiResult.upiIds, ...regexResult.upiIds])),
+    bankAccounts: Array.from(new Set([...aiResult.bankAccounts, ...regexResult.bankAccounts])),
+    phishingLinks: Array.from(new Set([...aiResult.phishingLinks, ...regexResult.phishingLinks])),
+    emails: Array.from(new Set([...aiResult.emails, ...regexResult.emails])),
+    suspiciousKeywords: Array.from(new Set([...aiResult.suspiciousKeywords, ...regexResult.suspiciousKeywords]))
   };
 
-  // Log merge stats
   const aiCount = Object.values(aiResult).flat().length;
   const regexCount = Object.values(regexResult).flat().length;
   const mergedCount = Object.values(merged).flat().length;
-
   console.log(`🔀 Merge stats: AI=${aiCount}, Regex=${regexCount}, Final=${mergedCount}`);
 
   return merged;
@@ -193,5 +221,6 @@ async function hybridExtraction(messageText, conversationHistory, regexExtractor
 module.exports = {
   initAIExtractor,
   extractWithAI,
-  hybridExtraction,
+  regexExtractor,
+  hybridExtraction
 };
