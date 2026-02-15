@@ -22,14 +22,15 @@ TASK: Extract ALL scam-related data from this conversation.
 ${fullContext}
 
 ANALYZE EVERY MESSAGE from the scammer and extract:
-1. Phone numbers (ANY format: +91-9876543210, 9876543210, etc.)
-   - CRITICAL: Do NOT extract 10-13 digit substrings of bank account numbers as phone numbers.
-2. UPI IDs (format: name@bank like fraud@paytm, scammer.fake@upi, verify@ybl, pay@oksbi)
-   - Distinguish from emails: UPI IDs use payment handles (@paytm, @ybl, @oksbi, @fakbank, @axisbank).
+1. Phone numbers (MUST be 10-digit Indian Mobile starting 6-9).
+   - EXCLUDE substrings of bank accounts.
+   - Example: 9876543210 is valid. 1234567890123 is INVALID.
+2. UPI IDs (format: name@bank, name@domain, etc.)
+   - ACCEPT unusual domains like @fakebank, @wallet.
 3. Bank account numbers (10-18 digits)
 4. URLs and links (http://, https://, www., or domains)
    - CRITICAL: Extract FULL URLs including query parameters (e.g., ?acc=123).
-5. Email addresses (format: name@domain.com)
+5. Email addresses (format: name@domain.com, name@fakebank)
    - Include ANY domain (even non-standard ones like @fakebank if used as email).
 6. Scam keywords (urgent, OTP, block, verify, etc.)
 
@@ -205,19 +206,65 @@ function regexExtractor(messageText, conversationHistory = []) {
   };
 }
 
+function cleanseHybridResult(data) {
+  if (!data) return data;
+
+  // 1. Consolidate Bank Accounts
+  // Ensure all bank accounts are strictly valid (10-18 digits)
+  const validBanks = new Set();
+  (data.bankAccounts || []).forEach(acc => {
+    const cleaned = acc.replace(/[\s\-]/g, '');
+    if (/^\d{10,18}$/.test(cleaned)) {
+      validBanks.add(cleaned);
+    }
+  });
+
+  // 2. Filter Phone Numbers
+  const validPhones = new Set();
+  (data.phoneNumbers || []).forEach(ph => {
+    const cleaned = ph.replace(/[\s\-]/g, '').replace(/^(\+91|91|0)/, '');
+
+    // Rule A: Must be 10 digits (Indian mobile)
+    if (!/^[6-9]\d{9}$/.test(cleaned)) return;
+
+    // Rule B: Must NOT be a substring of any bank account
+    const isSubstring = [...validBanks].some(bank => bank.includes(cleaned));
+    if (!isSubstring) {
+      validPhones.add(ph);
+    }
+  });
+
+  // 3. Email/UPI Deduplication (Optional, but good hygiene)
+  // If strict email vs UPI logic is needed, apply here. 
+  // For now, trust the extractors but ensure no duplicates.
+
+  return {
+    ...data,
+    bankAccounts: Array.from(validBanks), // Return normalized/cleaned banks? Or original? 
+    // Better to return original strings for banks to preserve formatting if possible, 
+    // but here we only have cleaned versions in validBanks set. 
+    // Let's filter the ORIGINAL list based on the cleaned set check to preserve format.
+    bankAccounts: (data.bankAccounts || []).filter(acc => validBanks.has(acc.replace(/[\s\-]/g, ''))),
+    phoneNumbers: Array.from(validPhones)
+  };
+}
+
 async function hybridExtraction(messageText, conversationHistory = [], options = {}) {
   const aiResult = await extractWithAI(messageText, conversationHistory, options.aiTimeoutMs ?? 10000);
   const regexResult = regexExtractor(messageText, conversationHistory);
-  if (!aiResult) return regexResult;
-  const merged = {
-    phoneNumbers: Array.from(new Set([...(aiResult.phoneNumbers || []), ...(regexResult.phoneNumbers || [])])),
-    upiIds: Array.from(new Set([...(aiResult.upiIds || []), ...(regexResult.upiIds || [])])),
-    bankAccounts: Array.from(new Set([...(aiResult.bankAccounts || []), ...(regexResult.bankAccounts || [])])),
-    phishingLinks: Array.from(new Set([...(aiResult.phishingLinks || []), ...(regexResult.phishingLinks || [])])),
-    emails: Array.from(new Set([...(aiResult.emails || []), ...(regexResult.emails || [])])),
-    suspiciousKeywords: Array.from(new Set([...(aiResult.suspiciousKeywords || []), ...(regexResult.suspiciousKeywords || [])]))
+
+  // Merge results
+  const combined = {
+    phoneNumbers: Array.from(new Set([...(aiResult?.phoneNumbers || []), ...(regexResult.phoneNumbers || [])])),
+    upiIds: Array.from(new Set([...(aiResult?.upiIds || []), ...(regexResult.upiIds || [])])),
+    bankAccounts: Array.from(new Set([...(aiResult?.bankAccounts || []), ...(regexResult.bankAccounts || [])])),
+    phishingLinks: Array.from(new Set([...(aiResult?.phishingLinks || []), ...(regexResult.phishingLinks || [])])),
+    emails: Array.from(new Set([...(aiResult?.emails || []), ...(regexResult.emails || [])])),
+    suspiciousKeywords: Array.from(new Set([...(aiResult?.suspiciousKeywords || []), ...(regexResult.suspiciousKeywords || [])]))
   };
-  return merged;
+
+  // CLEANSE the final merged result
+  return cleanseHybridResult(combined);
 }
 
 module.exports = {

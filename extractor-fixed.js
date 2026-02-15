@@ -14,7 +14,8 @@ const UPI_PATTERNS = [
 ];
 
 // Relaxed email regex to allow domains like "fakebank" (no dot required)
-const EMAIL_REGEX = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+/g;
+// Adjusted to ensure it doesn't end with a dot (trailing punctuation)
+const EMAIL_REGEX = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.-]*[a-zA-Z0-9-]/g;
 const URL_PATTERNS = [
     /https?:\/\/[^\s"'<>]+/gi,
     /(?:www\.)[a-zA-Z0-9\-]+\.[a-zA-Z]{2,}[^\s]*/gi,
