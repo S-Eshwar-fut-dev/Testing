@@ -105,7 +105,7 @@ async function generateReply(
             model: "gpt-5-mini",
             messages,
             temperature: 0.8,
-            max_tokens: 60,
+            max_completion_tokens: 60,
         }, { signal: controller.signal });
 
         clearTimeout(timeoutId);
@@ -133,7 +133,7 @@ async function generateReply(
 
         // Recovery with simplified prompt
         try {
-            console.log(`🔄 Attempting recovery with gpt-4o-mini simplified...`);
+            console.log(`🔄 Attempting recovery with gpt-5-mini simplified...`);
             const recoveryController = new AbortController();
             const recoveryTimeout = setTimeout(() => recoveryController.abort(), 4000);
 
@@ -147,7 +147,7 @@ async function generateReply(
                     { role: "user", content: newMessage },
                 ],
                 temperature: 0.8,
-                max_tokens: 30,
+                max_completion_tokens: 30,
             }, { signal: recoveryController.signal });
 
             clearTimeout(recoveryTimeout);
@@ -192,7 +192,7 @@ async function classifyScamIntent(conversationHistory, latestMessage) {
                 { role: "user", content: prompt },
             ],
             temperature: 0,
-            max_tokens: 8,
+            max_completion_tokens: 8,
         }, { signal: classifyController.signal });
 
         clearTimeout(classifyTimeout);
