@@ -102,7 +102,7 @@ async function generateReply(
         const timeoutId = setTimeout(() => controller.abort(), 7000);
 
         const completion = await openaiClient.chat.completions.create({
-            model: "gpt-5-mini",
+            model: "gpt-4o-mini",
             messages,
 
             max_completion_tokens: 60,
@@ -133,12 +133,12 @@ async function generateReply(
 
         // Recovery with simplified prompt
         try {
-            console.log(`🔄 Attempting recovery with gpt-5-mini simplified...`);
+            console.log(`🔄 Attempting recovery with gpt-40-mini simplified...`);
             const recoveryController = new AbortController();
             const recoveryTimeout = setTimeout(() => recoveryController.abort(), 4000);
 
             const recovery = await openaiClient.chat.completions.create({
-                model: "gpt-5-mini",
+                model: "gpt-4o-mini",
                 messages: [
                     {
                         role: "system",
@@ -183,7 +183,7 @@ async function classifyScamIntent(conversationHistory, latestMessage) {
         const classifyTimeout = setTimeout(() => classifyController.abort(), 8000);
 
         const completion = await openaiClient.chat.completions.create({
-            model: "gpt-5-mini",
+            model: "gpt-4o-mini",
             messages: [
                 {
                     role: "system",
