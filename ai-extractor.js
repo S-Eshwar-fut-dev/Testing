@@ -21,14 +21,17 @@ TASK: Extract ALL scam-related data from this conversation.
 
 ${fullContext}
 
-EXTRACT THESE 6 TYPES ONLY (exact keys & types):
-
-1. phoneNumbers: array of exact phone strings found (any format)
-2. upiIds: array of exact UPI IDs (format like name@bank)
-3. bankAccounts: array of exact bank account numbers (10-18 digits)
-4. phishingLinks: array of exact URLs / domains found
-5. emails: array of exact email addresses
-6. suspiciousKeywords: array of exact suspicious words as they appear (lowercase preferred)
+ANALYZE EVERY MESSAGE from the scammer and extract:
+1. Phone numbers (ANY format: +91-9876543210, 9876543210, etc.)
+   - CRITICAL: Do NOT extract 10-13 digit substrings of bank account numbers as phone numbers.
+2. UPI IDs (format: name@bank like fraud@paytm, scammer.fake@upi, verify@ybl, pay@oksbi)
+   - Distinguish from emails: UPI IDs use payment handles (@paytm, @ybl, @oksbi, @fakbank, @axisbank).
+3. Bank account numbers (10-18 digits)
+4. URLs and links (http://, https://, www., or domains)
+   - CRITICAL: Extract FULL URLs including query parameters (e.g., ?acc=123).
+5. Email addresses (format: name@domain.com)
+   - Include ANY domain (even non-standard ones like @fakebank if used as email).
+6. Scam keywords (urgent, OTP, block, verify, etc.)
 
 CRITICAL RULES:
 - Extract EXACT values found; do NOT invent or normalize beyond trimming.

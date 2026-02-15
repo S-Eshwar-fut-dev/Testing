@@ -1,6 +1,4 @@
-/**
- * FIXED INTELLIGENCE EXTRACTOR - Analyzes FULL conversation history
- */
+// FIXED INTELLIGENCE EXTRACTOR - Analyzes FULL conversation history
 
 // Same regex patterns as before
 const PHONE_PATTERNS = [
@@ -15,7 +13,8 @@ const UPI_PATTERNS = [
     /\d{10}@[a-zA-Z]{3,}/g,
 ];
 
-const EMAIL_REGEX = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g;
+// Relaxed email regex to allow domains like "fakebank" (no dot required)
+const EMAIL_REGEX = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+/g;
 const URL_PATTERNS = [
     /https?:\/\/[^\s"'<>]+/gi,
     /(?:www\.)[a-zA-Z0-9\-]+\.[a-zA-Z]{2,}[^\s]*/gi,
@@ -23,8 +22,9 @@ const URL_PATTERNS = [
 ];
 
 const BANK_ACCOUNT_PATTERNS = [
-    /\b\d{10,18}\b/g,
-    /\b\d{4}[\s\-]?\d{4}[\s\-]?\d{4}(?:[\s\-]?\d{2,6})?\b/g,
+    /\b\d{11,18}\b/g, // 11-18 digits (definitely not phone)
+    /\b[0-5]\d{9}\b/g, // 10 digits starting with 0-5 (not phone)
+    /(?:account|acct|a\/c|acc|no|number)[\s.:-]*(\d{10,18})/gi // Labeled accounts
 ];
 
 const SUSPICIOUS_KEYWORDS = [
@@ -40,14 +40,20 @@ const SUSPICIOUS_KEYWORDS = [
     "rbi", "reserve bank", "income tax", "government",
 ];
 
-function extractPhoneNumbers(text) {
+function extractPhoneNumbers(text, bankAccounts) {
     const phones = new Set();
+    const bankAccountStrings = Array.from(bankAccounts).map(acc => acc.replace(/[\s\-]/g, ''));
+
     for (const pattern of PHONE_PATTERNS) {
         const matches = text.match(pattern) || [];
         for (let match of matches) {
             let cleaned = match.replace(/[\s\-]/g, '');
             cleaned = cleaned.replace(/^(\+91|91|0)/, '');
-            if (/^[6-9]\d{9}$/.test(cleaned)) {
+
+            // CONFLICT RESOLUTION: Check if this phone number is part of a bank account
+            const isPartOfBankAccount = bankAccountStrings.some(acc => acc.includes(cleaned));
+
+            if (!isPartOfBankAccount && /^[6-9]\d{9}$/.test(cleaned)) {
                 phones.add(match);
             }
         }
@@ -57,34 +63,75 @@ function extractPhoneNumbers(text) {
 
 function extractUPIIds(text) {
     const upis = new Set();
-    const emails = new Set();
+    // Common email domains to exclude from UPI extraction
+    const emailDomains = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'rediffmail.com', 'icloud.com'];
 
-    const emailMatches = text.match(EMAIL_REGEX) || [];
-    emailMatches.forEach(e => emails.add(e.toLowerCase()));
+    // Extract all potential email-like strings
+    const matches = text.match(EMAIL_REGEX) || [];
 
-    const emailDomains = ['gmail', 'yahoo', 'hotmail', 'outlook', 'mail', 'protonmail', 'rediffmail'];
+    for (const match of matches) {
+        const lower = match.toLowerCase();
+        const domain = lower.split('@')[1];
 
-    for (const pattern of UPI_PATTERNS) {
-        const matches = text.match(pattern) || [];
-        for (const match of matches) {
-            const lower = match.toLowerCase();
-            if (emails.has(lower)) continue;
+        if (!domain) continue;
 
-            const domain = match.split('@')[1]?.toLowerCase();
-            if (!domain) continue;
+        // If it's a known email domain, skip (it's an email, not UPI)
+        if (emailDomains.some(d => domain.endsWith(d))) continue;
 
-            if (emailDomains.some(d => domain.startsWith(d))) continue;
-
+        // If it's a payment handle or generic domain, keep as UPI logic
+        // Check for common UPI handles
+        const upiHandles = ['paytm', 'ybl', 'oksbi', 'phonepe', 'axisbank', 'icici', 'freecharge', 'ibl', 'sbi', 'pnb', 'uboi', 'fakebank'];
+        if (upiHandles.some(h => domain.includes(h))) {
             upis.add(match);
+        } else {
+            // If domain is unknown and doesn't look like a standard TLD, assume UPI/Payment handle in scambait context
+            // But valid emails might slip in. Let's be aggressive for UPI.
+            // If it DOESN'T have a dot, it's likely a UPI handle (e.g. name@paytm)
+            if (!domain.includes('.')) {
+                upis.add(match);
+            } else {
+                // Has dot, but not in excluded list. 
+                // If it ends in .com/.in etc, it might be an email. 
+                // But user wants "verify.fraud@paytm" -> upi.
+                // So if domain is "paytm", it matches upiHandles check above.
+            }
         }
     }
-
     return Array.from(upis);
 }
 
 function extractEmails(text) {
-    const emails = text.match(EMAIL_REGEX) || [];
-    return [...new Set(emails.map(e => e.toLowerCase()))];
+    const emails = new Set();
+    const matches = text.match(EMAIL_REGEX) || [];
+    const emailDomains = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'rediffmail.com']; // Strict email list
+
+    for (const match of matches) {
+        const lower = match.toLowerCase();
+        const domain = lower.split('@')[1];
+        if (!domain) continue;
+
+        // If known email domain, definitely email
+        if (emailDomains.some(d => domain.endsWith(d))) {
+            emails.add(match);
+        } else {
+            // If it's NOT a known UPI handle, treat as email? 
+            // User said: "Email: scammer.fraud@fakebank" 
+            // But also: "UPI Domains ... @fakebank"
+            // So fakebank could be either. User said: "scammer.fraud@fakebank" -> Emails OR UPI.
+            // Let's rely on the UPI extraction to grab payment handles.
+            // If it's NOT caught by UPI extraction, valid email?
+            // Actually, best strategy: Extract ALL as candidates, then partition.
+
+            // For this specific logic:
+            // If it allows "fakebank", we add it.
+            // But verify it's not a generic UPI handle like "paytm" which typically isn't an email service.
+            const upiHandles = ['paytm', 'ybl', 'oksbi', 'phonepe', 'axl', 'ibl', 'ybl'];
+            if (!upiHandles.some(h => domain === h)) {
+                emails.add(match);
+            }
+        }
+    }
+    return Array.from(emails);
 }
 
 function extractURLs(text) {
@@ -92,6 +139,7 @@ function extractURLs(text) {
     for (const pattern of URL_PATTERNS) {
         const matches = text.match(pattern) || [];
         matches.forEach(url => {
+            // Don't strip query params aggressively
             let cleaned = url.replace(/[.,;!?]+$/, '');
             urls.add(cleaned);
         });
@@ -99,21 +147,17 @@ function extractURLs(text) {
     return Array.from(urls);
 }
 
-function extractBankAccounts(text, phoneNumbers) {
+function extractBankAccounts(text) {
     const accounts = new Set();
-    const phoneSet = new Set(phoneNumbers.map(p => p.replace(/[\s\-+]/g, '')));
-
     for (const pattern of BANK_ACCOUNT_PATTERNS) {
         const matches = text.match(pattern) || [];
         for (const match of matches) {
             const cleaned = match.replace(/[\s\-]/g, '');
-            if (phoneSet.has(cleaned)) continue;
             if (/^\d{10,18}$/.test(cleaned)) {
                 accounts.add(match);
             }
         }
     }
-
     return Array.from(accounts);
 }
 
@@ -138,11 +182,20 @@ function extractIntelligence(text) {
         };
     }
 
-    const emails = extractEmails(text);
-    const phoneNumbers = extractPhoneNumbers(text);
-    const upiIds = extractUPIIds(text);
+    // 1. URLs
     const phishingLinks = extractURLs(text);
-    const bankAccounts = extractBankAccounts(text, phoneNumbers);
+
+    // 2. Bank Accounts (First priority)
+    const bankAccounts = extractBankAccounts(text);
+
+    // 3. Phone Numbers (Exclude substrings of bank accounts)
+    const phoneNumbers = extractPhoneNumbers(text, bankAccounts);
+
+    // 4. Emails & UPI (Separate logic)
+    const emails = extractEmails(text);
+    const upiIds = extractUPIIds(text);
+
+    // 5. Keywords
     const suspiciousKeywords = findSuspiciousKeywords(text);
 
     return {
@@ -157,7 +210,6 @@ function extractIntelligence(text) {
 
 /**
  * CRITICAL: Extract from FULL conversation history
- * This is what's missing in your current code!
  */
 function extractFromConversation(conversationHistory) {
     console.log("🔍 Extracting from full conversation history...");
@@ -171,9 +223,11 @@ function extractFromConversation(conversationHistory) {
         suspiciousKeywords: new Set(),
     };
 
-    // Extract from ALL messages (especially scammer messages)
+    // We process the ENTIRE text block for bank/phone conflict resolution across messages
+    // But for now, doing message-by-message is okay IF the bank account and phone are in same message.
+    // If they are in different messages, the conflict isn't present in that message's text.
+
     for (const msg of conversationHistory || []) {
-        // ONLY extract from scammer messages (not user responses)
         if (msg.sender === "scammer") {
             const extracted = extractIntelligence(msg.text);
 
@@ -212,6 +266,6 @@ function mergeIntelligence(existing, newData) {
 
 module.exports = {
     extractIntelligence,
-    extractFromConversation,  // NEW: Extract from full conversation
+    extractFromConversation,
     mergeIntelligence
 };
